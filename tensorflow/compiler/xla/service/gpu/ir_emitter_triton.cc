@@ -157,19 +157,20 @@ Value Cast(mlir::ImplicitLocOpBuilder& b, Value value, Type dst_element_ty) {
     return value;
   }
 
+  // All operations on bf16 are done through f32.
+  if (src_element_ty.isBF16()) {
+    return Cast(b, b.create<ma::ExtFOp>(fp32_ty, value), dst_element_ty);
+  }
+  if (dst_element_ty.isBF16()) {
+    return b.create<ma::TruncFOp>(dst_ty, Cast(b, value, b.getF32Type()));
+  }
+
   // Float <=> float
   auto src_fp_element_ty = src_element_ty.dyn_cast<mlir::FloatType>();
   auto dst_fp_element_ty = dst_element_ty.dyn_cast<mlir::FloatType>();
   if (src_fp_element_ty && dst_fp_element_ty) {
-    // f16 <=> bf16 is a bit special, since we can neither extend, nor truncate
-    // one into the other. Instead, we first extend src to f32, and then
-    // truncate to dst.
-    if ((src_element_ty.isF16() && dst_element_ty.isBF16()) ||
-        (src_element_ty.isBF16() && dst_element_ty.isF16())) {
-      return b.create<ma::TruncFOp>(dst_ty,
-                                    b.create<ma::ExtFOp>(fp32_ty, value));
-    } else if (src_fp_element_ty.getFPMantissaWidth() >
-               dst_fp_element_ty.getFPMantissaWidth()) {
+    if (src_fp_element_ty.getFPMantissaWidth() >
+        dst_fp_element_ty.getFPMantissaWidth()) {
       return b.create<ma::TruncFOp>(dst_ty, value);
     } else {
       return b.create<ma::ExtFOp>(dst_ty, value);
@@ -620,7 +621,7 @@ template <typename IndexT>
 StatusOr<LaunchDimensions> MatMulImpl(
     mlir::OpBuilder builder, absl::string_view libdevice_path,
     const HloDotInstruction* dot_instr, mlir::triton::FuncOp fn,
-    const tensorflow::AutotuneResult::TritonGemmKey& config, int shmem_budget) {
+    const AutotuneResult::TritonGemmKey& config, int shmem_budget) {
   const HloInstruction* root = dot_instr->parent()->root_instruction();
   CHECK(!root->shape().IsTuple());
 
@@ -1153,10 +1154,12 @@ StatusOr<LaunchDimensions> MatMulImpl(
 
 }  // namespace
 
-StatusOr<LaunchDimensions> MatMul(
-    mlir::OpBuilder builder, absl::string_view libdevice_path,
-    const HloComputation* computation, mlir::triton::FuncOp fn,
-    const tensorflow::AutotuneResult::TritonGemmKey& config, int shmem_budget) {
+StatusOr<LaunchDimensions> MatMul(mlir::OpBuilder builder,
+                                  absl::string_view libdevice_path,
+                                  const HloComputation* computation,
+                                  mlir::triton::FuncOp fn,
+                                  const AutotuneResult::TritonGemmKey& config,
+                                  int shmem_budget) {
   const HloDotInstruction* dot_instr = DynCast<HloDotInstruction>(
       hlo_query::GetFirstInstructionWithOpcode(*computation, HloOpcode::kDot));
   // Use 32-bit indexing if addressing any of the inputs or the output (which
@@ -1175,10 +1178,12 @@ StatusOr<LaunchDimensions> MatMul(
   }
 }
 
-StatusOr<LaunchDimensions> SoftMax(
-    mlir::OpBuilder builder, absl::string_view libdevice_path,
-    const HloComputation* computation, mlir::triton::FuncOp fn,
-    const tensorflow::AutotuneResult::TritonGemmKey& config, int) {
+StatusOr<LaunchDimensions> SoftMax(mlir::OpBuilder builder,
+                                   absl::string_view libdevice_path,
+                                   const HloComputation* computation,
+                                   mlir::triton::FuncOp fn,
+                                   const AutotuneResult::TritonGemmKey& config,
+                                   int) {
   const HloInstruction* root = computation->root_instruction();
   auto loc = mlir::NameLoc::get(builder.getStringAttr(root->name()));
   mlir::ImplicitLocOpBuilder b(loc, builder);
